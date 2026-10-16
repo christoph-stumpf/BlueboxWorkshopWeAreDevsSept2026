@@ -2,11 +2,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const injectFault = require('./faults');
 
 const port = Number(process.env.PORT || 8088);
 const paymentUrl = process.env.PAYMENT_URL || 'http://localhost:4004';
 const postgrestUrl = process.env.POSTGREST_URL || 'http://localhost:3000';
-const databasePool = [{}, {}];
+const poolSize = Number(process.env.DB_POOL_SIZE || 2);
+const databasePool = Array.from({ length: poolSize }, () => ({}));
 const products = [
   { id: 'aurora-mug', name: 'Aurora Field Mug', description: 'A durable enamel mug for early starts and late ideas.', priceCents: 2400, category: 'Desk', emoji: '☕' },
   { id: 'signal-notebook', name: 'Signal Notebook', description: 'Dot-grid pages for diagrams, traces, and half-formed plans.', priceCents: 1800, category: 'Desk', emoji: '📓' },
@@ -21,7 +23,7 @@ const readBody = req => new Promise((resolve, reject) => { let value = ''; req.o
 const database = async (url, options = {}) => {
   const connection = databasePool.pop();
   if (!connection) {
-    console.error(JSON.stringify({ event: 'database_pool_exhausted', poolSize: 2, databaseUrl: url }));
+    console.error(JSON.stringify({ event: 'database_pool_exhausted', poolSize, databaseUrl: url }));
     throw new Error('database connection pool exhausted');
   }
   try {
@@ -71,4 +73,4 @@ async function route(req, res, url) {
   if (url.pathname === '/styles.css') return send(res, 200, fs.readFileSync(path.join(__dirname, 'frontend/styles.css'), 'utf8'), 'text/css');
   return send(res, 404, { error: 'Not found' });
 }
-http.createServer((req, res) => route(req, res, new URL(req.url, `http://${req.headers.host}`)).catch(error => { console.error(error); send(res, 500, { error: error.message }); })).listen(port, () => console.log(`shop API and frontend running at http://localhost:${port}`));
+http.createServer((req, res) => { const url = new URL(req.url, `http://${req.headers.host}`); if (injectFault('shop-api', req.method, url.pathname)) return send(res, 500, { error: 'injected fault' }); return route(req, res, url).catch(error => { console.error(error); send(res, 500, { error: error.message }); }); }).listen(port, () => console.log(`shop API and frontend running at http://localhost:${port}`));
