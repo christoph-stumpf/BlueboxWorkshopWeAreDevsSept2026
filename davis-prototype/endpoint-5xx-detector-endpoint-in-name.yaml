@@ -1,0 +1,58 @@
+# Comparison variant 4b of endpoint-5xx-detector.yaml: endpoint in event.name.
+#
+# Identical signal, thresholds and merge setting; event.name carries the endpoint. Tests the
+# handoff claim that an endpoint in the event identity stops same-service events from merging.
+#
+# Schema reference: builtin:davis.anomaly-detectors
+# Apply:  dtctl apply -f davis-prototype/endpoint-5xx-detector-endpoint-in-name.yaml --plain
+schemaId: builtin:davis.anomaly-detectors
+scope: environment
+value:
+  enabled: false
+  title: "[Prototype] Endpoint 5xx error rate (OTel, endpoint in name)"
+  description: Per-endpoint 5xx error rate from server spans, one event per service endpoint.
+  source: dtctl
+  analyzer:
+    name: dt.statistics.ui.anomaly_detection.StaticThresholdAnomalyDetectionAnalyzer
+    input:
+      - key: query.expression
+        value: |-
+          fetch spans
+          | filter span.kind == "server" and isNotNull(dt.smartscape.service) and isNotNull(endpoint.name)
+          | makeTimeseries {total = count(), errors = countIf(http.response.status_code >= 500)}, by:{service_id = dt.smartscape.service, service_name = dt.service.name, endpoint = endpoint.name}, interval: 1m, time: start_time
+          | fieldsAdd error_rate = 100 * errors[] / total[]
+          | fieldsRemove total, errors
+      - key: threshold
+        value: "5"
+      - key: alertCondition
+        value: ABOVE
+      - key: slidingWindow
+        value: "5"
+      - key: violatingSamples
+        value: "3"
+      - key: dealertingSamples
+        value: "5"
+      - key: alertOnMissingData
+        value: "false"
+  executionSettings:
+    # Queries run on behalf of this identity. The prototype uses the tenant user who applies it;
+    # a production rollout uses a service user (the box55124 detectors do).
+    actor: 366c5f46-7ede-4b70-a5aa-8a70a3ace5eb
+  eventTemplate:
+    properties:
+      - key: event.type
+        value: ERROR_EVENT
+      - key: event.name
+        value: "5xx error rate on {dims:service_name} {dims:endpoint}"
+      - key: event.description
+        value: "5xx error rate on endpoint `{dims:endpoint}` of service `{dims:service_name}` was {alert_condition} {threshold}% within the sliding window."
+      - key: dt.smartscape_source.id
+        value: "{dims:service_id}"
+      - key: dt.source_entity
+        value: "{dims:service_id}"
+      - key: endpoint.name
+        value: "{dims:endpoint}"
+      - key: service.name
+        value: "{dims:service_name}"
+      - key: dt.davis.is_merging_allowed
+        value: "true"

@@ -1,0 +1,49 @@
+# Probe: does this tenant turn a Davis anomaly-detector event into a Davis problem?
+#
+# Fires on purpose: the series counts query-execution events per minute, which every tenant has
+# while anyone queries it, and alerts above 0. Applied with identical content on two tenants at
+# the same time, it separates "problem creation broken on one tenant" from "broken everywhere".
+# The event binds to no entity, so the default correlation rule "Correlate environment entity
+# events by event ID" applies, and it cannot merge with the endpoint detector's service events.
+#
+# Schema reference: builtin:davis.anomaly-detectors
+# Apply:  dtctl --context <tenant> apply -f davis-prototype/problem-creation-probe.yaml --plain
+schemaId: builtin:davis.anomaly-detectors
+scope: environment
+value:
+  enabled: true
+  title: "[Prototype] Problem creation probe"
+  description: Always-firing probe that checks whether Davis events become problems on this tenant.
+  source: dtctl
+  analyzer:
+    name: dt.statistics.ui.anomaly_detection.StaticThresholdAnomalyDetectionAnalyzer
+    input:
+      - key: query.expression
+        value: |-
+          fetch dt.system.events
+          | filter event.kind == "QUERY_EXECUTION_EVENT"
+          | makeTimeseries queries = count(), interval: 1m
+      - key: threshold
+        value: "0"
+      - key: alertCondition
+        value: ABOVE
+      - key: slidingWindow
+        value: "5"
+      - key: violatingSamples
+        value: "3"
+      - key: dealertingSamples
+        value: "5"
+      - key: alertOnMissingData
+        value: "false"
+  executionSettings:
+    actor: 366c5f46-7ede-4b70-a5aa-8a70a3ace5eb
+  eventTemplate:
+    properties:
+      - key: event.type
+        value: ERROR_EVENT
+      - key: event.name
+        value: "Problem creation probe"
+      - key: event.description
+        value: "Probe event: query executions per minute were {alert_condition} {threshold}."
+      - key: dt.davis.is_merging_allowed
+        value: "true"

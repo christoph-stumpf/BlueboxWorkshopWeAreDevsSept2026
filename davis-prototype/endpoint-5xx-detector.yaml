@@ -1,0 +1,70 @@
+# Davis anomaly detector: per-endpoint 5xx error rate on OTel-only services (prototype).
+#
+# One signal per (service, endpoint): a spans-based timeseries of the 5xx error rate, split by
+# the service's Smartscape node and endpoint.name, judged by the static-threshold analyzer's
+# sliding window (3 of 5 one-minute samples above 5%, 5 clean samples to close).
+#
+# Event identity is per service: event.name carries only the service name, and the event binds
+# to the service via dt.smartscape_source.id. The default correlation rule "Correlate events
+# from the same Smartscape entity" (grouping dt.smartscape_source.id, 15m) then merges the
+# endpoint events of one service into one problem. The failing endpoint travels in
+# event.description and the endpoint.name event property, one event per endpoint.
+#
+# Fields: endpoint.name, dt.smartscape.service, dt.service.name and http.response.status_code
+# are populated on OTel-only spans. Spans in this tenant have a null `timestamp`, so
+# makeTimeseries bins on start_time.
+#
+# Schema reference: builtin:davis.anomaly-detectors
+# Apply:  dtctl apply -f davis-prototype/endpoint-5xx-detector.yaml --dry-run --plain, then without --dry-run
+# Verify: dtctl get anomaly-detectors -o json --plain
+schemaId: builtin:davis.anomaly-detectors
+scope: environment
+value:
+  enabled: false
+  title: "[Prototype] Endpoint 5xx error rate (OTel)"
+  description: Per-endpoint 5xx error rate from server spans, one event per service endpoint.
+  source: dtctl
+  analyzer:
+    name: dt.statistics.ui.anomaly_detection.StaticThresholdAnomalyDetectionAnalyzer
+    input:
+      - key: query.expression
+        value: |-
+          fetch spans
+          | filter span.kind == "server" and isNotNull(dt.smartscape.service) and isNotNull(endpoint.name)
+          | makeTimeseries {total = count(), errors = countIf(http.response.status_code >= 500)}, by:{service_id = dt.smartscape.service, service_name = dt.service.name, endpoint = endpoint.name}, interval: 1m, time: start_time
+          | fieldsAdd error_rate = 100 * errors[] / total[]
+          | fieldsRemove total, errors
+      - key: threshold
+        value: "5"
+      - key: alertCondition
+        value: ABOVE
+      - key: slidingWindow
+        value: "5"
+      - key: violatingSamples
+        value: "3"
+      - key: dealertingSamples
+        value: "5"
+      - key: alertOnMissingData
+        value: "false"
+  executionSettings:
+    # Queries run on behalf of this identity. The prototype uses the tenant user who applies it;
+    # a production rollout uses a service user (the box55124 detectors do).
+    actor: 366c5f46-7ede-4b70-a5aa-8a70a3ace5eb
+  eventTemplate:
+    properties:
+      - key: event.type
+        value: ERROR_EVENT
+      - key: event.name
+        value: "Endpoint 5xx error rate on {dims:service_name}"
+      - key: event.description
+        value: "5xx error rate on endpoint `{dims:endpoint}` of service `{dims:service_name}` was {alert_condition} {threshold}% within the sliding window."
+      - key: dt.smartscape_source.id
+        value: "{dims:service_id}"
+      - key: dt.source_entity
+        value: "{dims:service_id}"
+      - key: endpoint.name
+        value: "{dims:endpoint}"
+      - key: service.name
+        value: "{dims:service_name}"
+      - key: dt.davis.is_merging_allowed
+        value: "true"
